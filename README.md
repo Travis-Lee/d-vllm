@@ -14,13 +14,13 @@ uv sync --all-extras --group dev
 source .venv/bin/activate
 ```
 
-# Model Download
+## Model Download
 To download the model weights manually, use the following command:
 ```shell
 python download_model.py 
 ```
 
-# Example Testing 
+## Example Testing 
 This is just a test to verify that the inference runs correctly on MacOS.
 ```shell
 ./test/run.sh
