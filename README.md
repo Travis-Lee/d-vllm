@@ -20,6 +20,11 @@ To download the model weights manually, use the following command:
 python download_model.py 
 ```
 
+## Get Model Params
+```shell
+./tools/get_params.py --model ModelPath (ex:~/huggingface/Qwen3-0.6B/model.safetensors)
+```
+
 ## Example Testing 
 This is just a test to verify that the inference runs correctly on MacOS.
 ```shell
