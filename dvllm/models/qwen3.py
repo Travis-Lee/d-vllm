@@ -87,11 +87,8 @@ class TransformerBlock(nn.Module):
 
         # rotary
         if self.use_rope and (rope_fn is not None):
-            try:
-                q, k = rope_fn(positions, q, k)
-            except Exception:
-                pass
-
+            q, k = rope_fn(positions, q, k)
+        
         factor = self.num_heads // self.num_kv_heads
         assert self.num_heads % self.num_kv_heads == 0
 
@@ -248,10 +245,12 @@ class Qwen3Model(nn.Module):
         self.head_dim = getattr(config, 'head_dim', self.hidden_size // self.num_heads)
 
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, self.hidden_size)
-        try:
-            self.rope_fn = get_rope(config.hidden_size)  # 注意这里改成 dim
-        except Exception:
-            self.rope_fn = None
+        self.rope_fn = get_rope(
+            self.head_dim,
+            self.head_dim,
+            getattr(config, "max_position_embeddings",40960),
+            getattr(config, "rope_theta",1000.0),
+        )        
 
         ff_hidden = getattr(config, "intermediate_size", self.hidden_size * 4)
         self.layers = nn.ModuleList()

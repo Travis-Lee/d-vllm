@@ -6,7 +6,6 @@ class SiluAndMul(nn.Module):
     def __init__(self):
         super().__init__()
 
-    @torch.compile
     def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         # 忽略多余参数
         # Expected usage: activation(up, gate) -> return silu(gate) * up

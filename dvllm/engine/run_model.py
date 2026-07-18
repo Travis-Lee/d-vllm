@@ -380,93 +380,34 @@ class RunModel:
         return self.model.compute_logits(graph_vars["outputs"][:bs])
 
 
+    @torch.inference_mode()
     def run(self, seqs: list[Sequence], is_prefill: bool, dump_path: str = None) -> list[int]:
         
         if not hasattr(self, "device"):
             if torch.backends.mps.is_available():
-                logging.info("Using MPS device")
                 self.device = torch.device("mps")
             elif torch.cuda.is_available():
-                logging.info(f"Using CUDA device")
                 self.device = torch.device("cuda")
             else:
-                logging.info("Using CPU device")
-                self.device = torch.device("cpu")   
-        
-        # 2. 批量生成 input_ids / positions
-        # 注意：prepare_prefill / prepare_decode 可能期望 token_ids
-        result = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
-        if result is None:
-            raise RuntimeError("prepare_prefill / prepare_decode returned None, check input seqs")
-    
-        input_ids, positions = result
+                self.device = torch.device("cpu")
 
-        # 3. 放到目标 device
-        input_ids = input_ids.to(self.device)
-        positions = positions.to(self.device)
-
-    
-        # 3. 生成采样用的 temperatures
-        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
-
-        # 4. 运行模型
-        logits = self.run_model(input_ids, positions, is_prefill, dump_path=dump_path)
-        
-        # DEBUG: 检查 logits 是否为 None 或包含 NaN
-        if logits is None:
-            logging.error("ERROR: logits is None! Model inference failed.")
-            token_ids = [0] * len(seqs)  # fallback
-            reset_context()
-            return token_ids
-        
-        logging.debug(f"logits shape: {logits.shape}, dtype: {logits.dtype}, device: {logits.device}")
-        logging.debug(f"logits stats: min={logits.min()}, max={logits.max()}, mean={logits.mean()}")
-        
-        if torch.isnan(logits).any():
-            logging.error("ERROR: logits contain NaN! Model computation failed.")
-            token_ids = [0] * len(seqs)  # fallback
-            reset_context()
-            return token_ids
-        
-        if torch.isinf(logits).any():
-            logging.error("ERROR: logits contain Inf! Model computation failed.")
-            token_ids = [0] * len(seqs)  # fallback
-            reset_context()
-            return token_ids
-
-        # 5. 使用采样器生成 token_ids
-        # sampler 返回 [B, L] 张量（每个序列的每个位置一个 token）
-        # 我们只取最后一个位置的 token 作为这一步的新生成 token
-        token_ids = None
-        if self.rank == 0:
-            # 如果用户请求了详细 debug（通过 DV_DEBUG_LAYERS 环境变量），打印 logits 的 topk / argmax 信息
-            try:
-                import os
-                if os.environ.get("DV_DEBUG_LAYERS", None):
-                    last_logits = logits[:, -1, :]
-                    topk_vals, topk_idx = last_logits.topk(8, dim=-1)
-                    # 打印第一条序列的 topk
-                    logging.info(f"[LOGITS-DEBUG] last step topk values (first seq): {topk_vals[0].tolist()}")
-                    logging.info(f"[LOGITS-DEBUG] last step topk idx   (first seq): {topk_idx[0].tolist()}")
-                    logging.info(f"[LOGITS-DEBUG] argmax (first seq): {last_logits[0].argmax().item()}, max={last_logits[0].max().item()}")
-            except Exception:
-                logging.exception("Failed to print logits debug info")
-
-            sampled_tensor = self.sampler(logits, temperatures)
-            logging.debug(f"Sampler output shape: {sampled_tensor.shape}, dtype: {sampled_tensor.dtype}")
+        token_ids = []
+        for seq in seqs:
+            ids = torch.tensor(seq.token_ids,dtype=torch.int64,device=self.device)
+            position = torch.arange(len(seq.token_ids),dtype=torch.int64, device=self.device)
+            hidden = self.model(ids,position,dump_path=dump_path) #[1,L,H]
+            logits = self.model.compute_logits(hidden)
+            last_logits = logits[0,-1].float().cpu()
             
-            # sampled_tensor 形状: [B, L]
-            # 取最后一列作为本步新生成的 token
-            if sampled_tensor.dim() == 2:
-                last_tokens = sampled_tensor[:, -1]  # [B]
+            temp = float(getattr(seq, 'temperature', 1.0) or 0.0)
+            if temp > 1e-5:
+                probs = torch.softmax(last_logits / temp, dim=-1)
+                next_id = int(torch.multinomial(probs, num_samples=1).item())
             else:
-                last_tokens = sampled_tensor  # [B]
-            
-            token_ids = last_tokens.tolist()  # 转为 python list
-            logging.debug(f"Final token_ids (last tokens only): {token_ids}")
-        # 6. 清理上下文
-        reset_context()
+                next_id = int(last_logits.argmax().item())
+            token_ids.append(next_id)
 
+        reset_context()
         return token_ids
       
     
